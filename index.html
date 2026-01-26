@@ -3216,115 +3216,94 @@ calculateChange() {
 async confirmSale() {
     if (this.state.isSaving) return;
 
-    const collectionRef = this.getSalesHistoryCollectionRef();
-    if (!collectionRef && !window.OfflineQueue) {
-        this.showInfoModal("ข้อผิดพลาด", "ยังไม่ได้เชื่อมต่อกับฐานข้อมูลและไม่สามารถบันทึก Offline ได้", true);
+    const tabData = this.state.tabs.get(this.state.activeTabId);
+    if (!tabData || tabData.cart.length === 0) return;
+
+    const { cart, discount } = tabData;
+    const cashReceived = parseFloat(document.getElementById('cash-received-input').value) || 0;
+    const subtotal = parseFloat(document.getElementById('payment-total-final').textContent) + discount;
+    const finalTotal = subtotal - discount;
+
+    if (cashReceived < finalTotal) {
+        this.calculateChange();
+        document.getElementById('cash-received-input').focus();
         return;
     }
 
-    const tabData = this.state.tabs.get(this.state.activeTabId);
-    if (!tabData) return;
-    const { cart, discount } = tabData;
-    const subtotal = cart.reduce((sum, item) => {
-        if (typeof item.priceOverride === 'number') {
-            return sum + (item.priceOverride * item.quantity);
-        }
-        return sum + this.calculateItemTotal(item.productUnit.pricingUnit, item.quantity);
-    }, 0);
-    const finalTotal = subtotal - discount;
-    const cashReceived = parseFloat(document.getElementById('cash-received-input').value) || 0;
-    
-    // [MODIFIED] ตรวจสอบยอดเงินและย้ายเคอร์เซอร์ถ้าไม่พอ
-    if (cashReceived < finalTotal) {
-        // เรียกใช้ฟังก์ชัน calculateChange() เพื่อแสดงสถานะ "เงินไม่พอ"
-        this.calculateChange();
-        
-        // ย้ายเคอร์เซอร์กลับไปที่ช่องรับเงิน
-        const cashInput = document.getElementById('cash-received-input');
-        cashInput.focus();
-        cashInput.select();
-        
-        // หยุดการทำงานของฟังก์ชันทันที
-        return; 
-    }
-    
     this.state.isSaving = true;
     const confirmButton = document.getElementById('confirm-sale-btn');
     confirmButton.disabled = true;
-    
+
+    const { api, db } = window.firebaseServices;
+    const salesCollectionRef = this.getSalesHistoryCollectionRef();
+    const productsCollectionRef = this.getProductsCollectionRef();
+    const batch = api.writeBatch(db);
+
     const newSaleId = await this.generateSaleId();
+    
+    // เตรียมข้อมูลสินค้าเพื่อบันทึกลงประวัติ
     const saleRecordItems = cart.map(item => {
-        const conversionFactor = item.productUnit?.pricingUnit?.conversionFactor || 1;
-        const costPerSellingUnit = item.productUnit?.pricingUnit?.cost || 0;
-        const costPerBaseUnit = conversionFactor > 0 ? costPerSellingUnit / conversionFactor : 0;
-        const pricePerUnit = typeof item.priceOverride === 'number' 
+        const pUnit = item.productUnit.pricingUnit;
+        const factor = pUnit.conversionFactor || 1;
+        const totalBaseQty = item.quantity * factor; // จำนวนรวมในหน่วยเล็กที่สุด
+
+        // คำนวณราคาเฉลี่ยต่อหน่วยที่ขายจริง
+        const pricePerSellingUnit = typeof item.priceOverride === 'number' 
             ? item.priceOverride 
-            : this.calculateItemTotal(item.productUnit.pricingUnit, item.quantity) / item.quantity;
+            : this.calculateItemTotal(pUnit, item.quantity) / item.quantity;
+
         return {
-            cartItemId: item.cartItemId, name: item.productUnit.display, unit: item.productUnit.pricingUnit.unitName,
-            quantity: item.quantity, price: pricePerUnit,
-            cost: costPerSellingUnit, productName: item.productUnit.productName, baseUnit: item.productUnit.baseUnit,
-            conversionFactor: conversionFactor, costPerBaseUnit: costPerBaseUnit,
-            productId: item.productUnit.productId
+            productId: item.productUnit.productId,
+            name: item.productUnit.display, // เช่น "สินค้า A (แพ็ค)"
+            productName: item.productUnit.productName, // ชื่อสินค้าเพียวๆ
+            unit: pUnit.unitName, // หน่วยที่ขาย เช่น "แพ็ค"
+            quantity: item.quantity, // จำนวนที่ขาย เช่น 1
+            conversionFactor: factor, // ตัวคูณ เช่น 4
+            totalBaseQuantity: totalBaseQty, // บันทึกว่าจริงๆ แล้วคือ 4 ห่อ
+            price: pricePerSellingUnit,
+            cost: pUnit.cost || 0,
+            baseUnit: item.productUnit.baseUnit // หน่วยเล็กที่สุด เช่น "ห่อ"
         };
     });
 
     const saleRecord = {
-        id: newSaleId, timestamp: new Date().toISOString(), items: saleRecordItems, subtotal: subtotal,
-        discount: discount, total: finalTotal, cashReceived: cashReceived, change: cashReceived - finalTotal,
+        id: newSaleId,
+        timestamp: new Date().toISOString(),
+        items: saleRecordItems,
+        subtotal: subtotal,
+        discount: discount,
+        total: finalTotal,
+        cashReceived: cashReceived,
+        change: cashReceived - finalTotal,
     };
-    
-    const { api, db } = window.firebaseServices;
-    const productsCollectionRef = this.getProductsCollectionRef();
-    const batch = api.writeBatch(db);
-    
-    for (const item of cart) {
-        const productRef = api.doc(productsCollectionRef, item.productUnit.productId);
-        const quantityInBaseUnits = item.quantity * (item.productUnit.pricingUnit.conversionFactor || 1);
-        const currentStock = item.productUnit.stockInBaseUnits || 0;
-        const newStock = currentStock - quantityInBaseUnits;
-        batch.update(productRef, { stockInBaseUnits: newStock });
-    }
-    
+
     try {
-        if (tabData.isEditing && tabData.originalFirestoreId) {
-            const oldSaleRef = api.doc(db, collectionRef.path, tabData.originalFirestoreId);
-            const newSaleRef = api.doc(collectionRef);
-            batch.delete(oldSaleRef);
-            batch.set(newSaleRef, saleRecord);
-        } else {
-            const newSaleDocRef = api.doc(collectionRef);
-            batch.set(newSaleDocRef, saleRecord);
+        // วนลูปหักสต็อกสินค้าแต่ละรายการ
+        for (const item of cart) {
+            const productRef = api.doc(productsCollectionRef, item.productUnit.productId);
+            const factor = item.productUnit.pricingUnit.conversionFactor || 1;
+            const deductionQty = item.quantity * factor; // หักตามจำนวนหน่วยย่อยจริง
+            
+            const currentStock = item.productUnit.stockInBaseUnits || 0;
+            batch.update(productRef, { 
+                stockInBaseUnits: currentStock - deductionQty 
+            });
         }
-        
+
+        // บันทึกบิลการขาย
+        const newSaleDocRef = api.doc(salesCollectionRef);
+        batch.set(newSaleDocRef, saleRecord);
+
         await batch.commit();
 
         this.hidePaymentModal();
         const tabToDelete = this.state.activeTabId;
-        document.getElementById('edit-status').style.display = 'none';
         this.closeTab(tabToDelete, false);
+        this.showInfoModal("สำเร็จ", `บันทึกการขาย ${newSaleId} เรียบร้อย`);
 
     } catch (e) {
-        console.error("Error committing sale, saving to offline queue: ", e);
-        
-        if(window.OfflineQueue) {
-            window.OfflineQueue.push({
-                type: 'sale',
-                payload: saleRecord,
-                tabData: {
-                    isEditing: tabData.isEditing,
-                    originalFirestoreId: tabData.originalFirestoreId
-                }
-            });
-            this.showInfoModal("บันทึก Offline", "ไม่สามารถเชื่อมต่อฐานข้อมูลได้ บันทึกการขายนี้ไว้ในเครื่องแล้ว และจะส่งข้อมูลอีกครั้งเมื่อออนไลน์", false);
-            
-            this.hidePaymentModal();
-            const tabToDelete = this.state.activeTabId;
-            document.getElementById('edit-status').style.display = 'none';
-            this.closeTab(tabToDelete, false);
-        } else {
-            this.showInfoModal("ผิดพลาด", "เกิดข้อผิดพลาดในการบันทึกข้อมูลการขายและอัปเดตสต็อก!", true);
-        }
+        console.error("Sale Error:", e);
+        this.showInfoModal("ผิดพลาด", "ไม่สามารถบันทึกข้อมูลได้: " + e.message, true);
     } finally {
         this.state.isSaving = false;
         confirmButton.disabled = false;
@@ -3610,131 +3589,51 @@ async confirmSale() {
             this.showInfoModal("ผิดพลาด", "เกิดข้อผิดพลาดในการล้างประวัติทั้งหมด!", true);
         } 
     },
-    updateHistoryDisplay() {
-        const historyBody = document.getElementById('history-body');
-        if (!historyBody) return;
-        const searchFilter = document.getElementById('history-search-input').value.toLowerCase().trim();
-        const filteredHistory = this.state.salesHistory.filter(sale => {
-            const saleIdMatch = sale.id.toLowerCase().includes(searchFilter);
-            const itemMatch = sale.items.some(item => item.name.toLowerCase().includes(searchFilter));
-            return searchFilter === '' || saleIdMatch || itemMatch;
-        });
-        historyBody.innerHTML = '';
+updateHistoryDisplay() {
+    const historyBody = document.getElementById('history-body');
+    if (!historyBody) return;
 
-        // === Product search count summary [enhanced] ===
-        (function () {
-            const summaryEl = document.getElementById('history-product-count');
-            if (!summaryEl) return;
+    const searchFilter = document.getElementById('history-search-input').value.toLowerCase().trim();
+    const filteredHistory = this.state.salesHistory.filter(sale => {
+        const idMatch = sale.id.toLowerCase().includes(searchFilter);
+        const itemMatch = sale.items.some(item => item.name.toLowerCase().includes(searchFilter));
+        return idMatch || itemMatch;
+    });
 
-            const q = (searchFilter || '').trim();
-            if (!q) { summaryEl.style.display = 'none'; summaryEl.innerHTML = ''; return; }
+    historyBody.innerHTML = '';
 
-            let totalSellingQty = 0;
-            let totalBaseQty = 0;
-            const sellingUnits = new Set();
-            const baseUnits = new Set();
-            let matchedAny = false;
+    filteredHistory.forEach(sale => {
+        const row = historyBody.insertRow();
+        
+        // ส่วนการแสดงผลรายการสินค้าในบิล
+        const itemDetails = sale.items.map(item => {
+            const name = this.escapeHtml(item.name);
+            const unit = item.unit || "";
+            const qty = item.quantity;
+            const factor = item.conversionFactor || 1;
+            const baseUnit = item.baseUnit || "";
 
-            // iterate only items that match product name, not sale id
-            filteredHistory.forEach(sale => {
-                (sale.items || []).forEach(item => {
-                    const name = (item.productName || item.name || '').toLowerCase();
-                    if (!name.includes(q)) return;
-
-                    matchedAny = true;
-                    const qty = Number(item.quantity) || 0;
-                    const unitName = item.unit || item.sellingUnit || (item.pricingUnit && item.pricingUnit.unitName) || '';
-                    const conv = Number(item.conversionFactor) || 1;
-                    const baseName = item.baseUnit || unitName || 'หน่วย';
-
-                    totalSellingQty += qty;
-                    totalBaseQty += qty * conv;
-                    if (unitName) sellingUnits.add(unitName);
-                    if (baseName) baseUnits.add(baseName);
-                });
-            });
-
-            if (!matchedAny) { summaryEl.style.display = 'none'; summaryEl.innerHTML = ''; return; }
-
-            // Build date-range label
-            const startDate = document.getElementById('start-date')?.value;
-            const endDate = document.getElementById('end-date')?.value;
-            let rangeText = '';
-            if (startDate && endDate) {
-                try {
-                    const s = new Date(startDate);
-                    const e = new Date(endDate);
-                    rangeText = `ในช่วง ${s.toLocaleDateString('th-TH')} – ${e.toLocaleDateString('th-TH')}`;
-                } catch (_) { /* ignore */ }
+            // ถ้าเป็นหน่วยใหญ่ (เช่น แพ็ค) ให้แสดงวงเล็บหน่วยย่อย
+            let detail = `${name} x ${qty} ${unit}`;
+            if (factor > 1) {
+                detail += ` <small style="color:var(--secondary-color)">(รวม ${qty * factor} ${baseUnit})</small>`;
             }
+            return detail;
+        }).join('<br>');
 
-            // Prefer selling unit if consistent, else show base unit
-            let mainLine = '';
-            if (sellingUnits.size === 1) {
-                const u = Array.from(sellingUnits)[0];
-                mainLine = `สินค้า “${this.escapeHtml(document.getElementById('history-search-input').value)}” ขายรวม ${totalSellingQty} ${u} ${rangeText}`;
-                // If base unit differs and conversion applied, append base summary
-                if (baseUnits.size === 1) {
-                    const bu = Array.from(baseUnits)[0];
-                    if (bu && bu !== u) {
-                        mainLine += ` (เทียบเท่า ${totalBaseQty} ${bu})`;
-                    }
-                }
-            } else {
-                // Mixed selling units. Report only in base units if consistent
-                if (baseUnits.size >= 1) {
-                    const bu = Array.from(baseUnits)[0];
-                    mainLine = `สินค้า “${this.escapeHtml(document.getElementById('history-search-input').value)}” ขายรวม ${totalBaseQty} ${bu} ${rangeText}`;
-                    if (baseUnits.size > 1) {
-                        mainLine += ` (หลายหน่วยฐาน)`;
-                    }
-                } else {
-                    // Fallback
-                    mainLine = `สินค้า “${this.escapeHtml(document.getElementById('history-search-input').value)}” ขายรวม ${totalSellingQty} หน่วย ${rangeText}`;
-                }
-            }
-
-            summaryEl.innerHTML = `<div class="label" style="font-weight:bold;color:var(--secondary-color);margin-bottom:0.25rem;">สรุปตามคำค้น</div><div class="value" style="font-size:1.1em;color:var(--dark-text);">${mainLine}</div>`;
-            summaryEl.style.display = 'block';
-        }).call(this);
-// replaced by enhanced version
-
-
-        const now = new Date();
-        const startOfCurrentHour = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours());
-        if (filteredHistory.length === 0) {
-            historyBody.innerHTML = '<tr><td colspan="6" style="text-align: center; padding: 2rem;">ไม่พบประวัติการขายที่ตรงกับเงื่อนไข</td></tr>';
-        } else {
-            filteredHistory.forEach((sale) => {
-                const row = historyBody.insertRow();
-                const saleTimestamp = new Date(sale.timestamp);
-                if (saleTimestamp < startOfCurrentHour) {
-                    row.classList.add('exported-row');
-     
-                                   row.title = 'รายการนี้ถูก Export แล้วโดยระบบอัตโนมัติ';
-                }
-const itemDetails = sale.items.map(item => {
-  const name = this.escapeHtml(item.name);
-  return `${name} (x${item.quantity})`;
-}).join('<br>');
-
-                const discountAmount = sale.discount ? sale.discount.toFixed(2) : '0.00';
-                
-                let adminActions = `<button type="button" class="edit-history-btn" onclick="POS_APP.editSaleRecord('${sale.firestoreId}')">แก้ไข</button><button type="button" class="delete-history-btn" onclick="POS_APP.showDeleteConfirmModal('${sale.firestoreId}', false)">ลบ</button>`;
-                let actionCellHTML 
-                = `<button type="button" class="print-history-btn" onclick="POS_APP.printSaleRecordFromHistory('${sale.firestoreId}')">พิมพ์</button>`;
-                
-                if (!this.state.isRestrictedMode) {
-                    actionCellHTML += adminActions;
-                }
-                
-                row.innerHTML = `<td>${new Date(sale.timestamp).toLocaleString('th-TH')}</td><td>${sale.id}</td><td>${itemDetails}</td><td>${discountAmount}</td><td><strong>${sale.total.toFixed(2)}</strong></td><td style="white-space: nowrap;">${actionCellHTML}</td>`;
-            });
-        }
-        const clearHistoryBtn = document.getElementById('clear-all-history-btn');
-        if(clearHistoryBtn) clearHistoryBtn.disabled = this.state.salesHistory.length === 0;
-        this.calculateSummaryForDisplayedHistory(filteredHistory);
-    },
+        row.innerHTML = `
+            <td>${new Date(sale.timestamp).toLocaleString('th-TH')}</td>
+            <td>${sale.id}</td>
+            <td>${itemDetails}</td>
+            <td>${sale.discount.toFixed(2)}</td>
+            <td><strong>${sale.total.toFixed(2)}</strong></td>
+            <td>
+                <button class="print-history-btn" onclick="POS_APP.printSaleRecordFromHistory('${sale.firestoreId}')">พิมพ์</button>
+                ${!this.state.isRestrictedMode ? `<button class="delete-history-btn" onclick="POS_APP.showDeleteConfirmModal('${sale.firestoreId}', false)">ลบ</button>` : ''}
+            </td>
+        `;
+    });
+},
     calculateSummaryForDisplayedHistory(displayedSales = []) { 
         let totalSales = 0, totalDiscount = 0, netSales = 0, totalCost = 0;
         displayedSales.forEach(sale => { 
@@ -4630,4 +4529,5 @@ document.addEventListener('keydown', (e) => {
     try { window.addEventListener('posapp-ready', ensure); } catch(_e) {}
   }
 })();
+
 </script>
