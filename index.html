@@ -3240,9 +3240,31 @@ async confirmSale() {
     const batch = api.writeBatch(db);
 
     try {
+        // --- [ 1. จัดการกรณี "แก้ไขบิลเก่า" ] ---
+        if (tabData.isEditing && tabData.originalFirestoreId) {
+            const oldSale = this.state.salesHistory.find(s => s.firestoreId === tabData.originalFirestoreId);
+            if (oldSale) {
+                // คืนสต็อกบิลเก่ากลับเข้าไปก่อน
+                for (const oldItem of oldSale.items) {
+                    const productRef = api.doc(productsCollectionRef, oldItem.productId);
+                    const oldFactor = oldItem.conversionFactor || 1;
+                    const returnQty = oldItem.quantity * oldFactor;
+                    
+                    // ใช้ increment เพื่อความปลอดภัยและแม่นยำ
+                    batch.update(productRef, { 
+                        stockInBaseUnits: api.increment(returnQty) 
+                    });
+                }
+                // ลบบิลเก่าทิ้ง
+                const oldDocRef = api.doc(salesCollectionRef, tabData.originalFirestoreId);
+                batch.delete(oldDocRef);
+                console.log(`♻️ คืนสต็อกและเตรียมลบบิลเก่า: ${oldSale.id}`);
+            }
+        }
+
         const newSaleId = await this.generateSaleId();
         
-        // 1. เตรียมข้อมูลสินค้าเพื่อบันทึกลงประวัติ
+        // --- [ 2. เตรียมข้อมูลสินค้าลงบิลใหม่ ] ---
         const saleRecordItems = cart.map(item => {
             const pUnit = item.productUnit.pricingUnit;
             const factor = pUnit.conversionFactor || 1;
@@ -3277,45 +3299,45 @@ async confirmSale() {
             change: cashReceived - finalTotal,
         };
 
-        // 2. วนลูปหักสต็อกสินค้า
+        // --- [ 3. หักสต็อกบิลใหม่ ] ---
         for (const item of cart) {
             const productRef = api.doc(productsCollectionRef, item.productUnit.productId);
             const factor = item.productUnit.pricingUnit.conversionFactor || 1;
             const deductionQty = item.quantity * factor;
             
-            const currentStock = item.productUnit.stockInBaseUnits || 0;
+            // หักสต็อก (ใช้ค่าลบใน increment)
             batch.update(productRef, { 
-                stockInBaseUnits: currentStock - deductionQty 
+                stockInBaseUnits: api.increment(-deductionQty) 
             });
         }
 
-        // 3. บันทึกบิลการขาย
+        // บันทึกบิลใหม่
         const newSaleDocRef = api.doc(salesCollectionRef);
         batch.set(newSaleDocRef, saleRecord);
 
-        // --- [ ขั้นตอนการ Commit และ Cleanup ] ---
+        // --- [ 4. Commit และ Cleanup ] ---
         await batch.commit();
 
-        // ปิดหน้าต่างรับเงินทันที
         this.hidePaymentModal();
-
-        // ลบ Tab ปัจจุบัน (ปิดบิล)
         const tabToDelete = this.state.activeTabId;
         this.closeTab(tabToDelete, false);
+
+        // เคลียร์สถานะการแก้ไขในหน้า UI
+        const editStatusEl = document.getElementById('edit-status');
+        if (editStatusEl) editStatusEl.style.display = 'none';
 
         // 🔄 อัปเดต Summary Grid ทันที (Real-time)
         if (typeof window.updateDailySummary === 'function') {
             window.updateDailySummary();
         }
 
-        // 🎯 โฟกัสไปที่ช่องค้นหาสินค้าทันที (Fast Workflow)
+        // 🎯 โฟกัสไปที่ช่องค้นหาสินค้าทันที
         this.focusSearchIfReady();
 
-        console.log(`🚀 บันทึกบิล ${newSaleId} สำเร็จและอัปเดตยอดเรียบร้อย`);
+        console.log(`🚀 บันทึกบิลสำเร็จ: ${newSaleId}`);
 
     } catch (e) {
         console.error("Sale Error:", e);
-        // แสดง Modal เฉพาะกรณีเกิด Error เท่านั้น
         this.showInfoModal("ผิดพลาด", "ไม่สามารถบันทึกข้อมูลได้: " + e.message, true);
     } finally {
         this.state.isSaving = false;
@@ -3626,7 +3648,6 @@ updateHistoryDisplay() {
             const factor = item.conversionFactor || 1;
             const baseUnit = item.baseUnit || "";
 
-            // ถ้าเป็นหน่วยใหญ่ (เช่น แพ็ค) ให้แสดงวงเล็บหน่วยย่อย
             let detail = `${name} x ${qty} ${unit}`;
             if (factor > 1) {
                 detail += ` <small style="color:var(--secondary-color)">(รวม ${qty * factor} ${baseUnit})</small>`;
@@ -3641,8 +3662,18 @@ updateHistoryDisplay() {
             <td>${sale.discount.toFixed(2)}</td>
             <td><strong>${sale.total.toFixed(2)}</strong></td>
             <td>
-                <button class="print-history-btn" onclick="POS_APP.printSaleRecordFromHistory('${sale.firestoreId}')">พิมพ์</button>
-                ${!this.state.isRestrictedMode ? `<button class="delete-history-btn" onclick="POS_APP.showDeleteConfirmModal('${sale.firestoreId}', false)">ลบ</button>` : ''}
+                <div class="history-actions" style="display: flex; gap: 5px;">
+                    <button class="print-history-btn" onclick="POS_APP.printSaleRecordFromHistory('${sale.firestoreId}')">พิมพ์</button>
+                    
+                    ${!this.state.isRestrictedMode ? `
+                        <button class="edit-history-btn" 
+                                style="background-color: #ff9800; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer;"
+                                onclick="POS_APP.editSaleRecord('${sale.firestoreId}')">แก้ไข</button>
+                                
+                        <button class="delete-history-btn" 
+                                onclick="POS_APP.showDeleteConfirmModal('${sale.firestoreId}', false)">ลบ</button>
+                    ` : ''}
+                </div>
             </td>
         `;
     });
@@ -4492,6 +4523,7 @@ document.addEventListener('DOMContentLoaded', () => {
 })();
 
 </script>
+
 
 
 
