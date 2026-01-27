@@ -3778,28 +3778,45 @@ updateHistoryDisplay() {
         document.getElementById('history-search-input').value = '';
         this.loadSalesHistoryFromFirestore(todayStart.toISOString(), todayEnd.toISOString());
     },
-    loadSalesHistoryFromFirestore(startDate, endDate) { 
-        const historyCollectionRef = this.getSalesHistoryCollectionRef();
-        if (!historyCollectionRef) return; 
-        if (this.state.unsubscribeSalesHistory) { this.state.unsubscribeSalesHistory(); } 
-        const { query, where } = window.firebaseServices.api;
-        let q; 
-        if (startDate && endDate) { 
-            q = query(historyCollectionRef, where("timestamp", ">=", startDate), where("timestamp", "<=", endDate) );
-        } else { 
-            q = query(historyCollectionRef);
+loadSalesHistoryFromFirestore(startDate, endDate) { 
+    const historyCollectionRef = this.getSalesHistoryCollectionRef();
+    if (!historyCollectionRef) return; 
+
+    if (this.state.unsubscribeSalesHistory) { this.state.unsubscribeSalesHistory(); } 
+
+    const { query, where } = window.firebaseServices.api;
+    let q; 
+
+    if (startDate && endDate) { 
+        q = query(historyCollectionRef, where("timestamp", ">=", startDate), where("timestamp", "<=", endDate) );
+    } else { 
+        q = query(historyCollectionRef);
+    } 
+
+    this.state.unsubscribeSalesHistory = window.firebaseServices.api.onSnapshot(q, (querySnapshot) => { 
+        const newHistory = []; 
+        querySnapshot.forEach((doc) => { 
+            newHistory.push({ ...doc.data(), firestoreId: doc.id }); 
+        }); 
+
+        // อัปเดตรายการประวัติการขายใน State
+        this.state.salesHistory = newHistory.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)); 
+        
+        // 1. อัปเดตตารางประวัติหน้า Modal
+        this.updateHistoryDisplay(); 
+
+        // 2. [เพิ่มจุดนี้] อัปเดต Summary Grid ที่หน้าขายหลักทันที
+        if (typeof updateDailySummary === 'function') {
+            updateDailySummary();
+        }
+
+    }, (error) => { 
+        console.error("Error loading sales history:", error); 
+        if (error.code === 'permission-denied') { 
+            this.showInfoModal("ข้อผิดพลาด", "ไม่มีสิทธิ์เข้าถึงข้อมูลประวัติการขาย", true); 
         } 
-        this.state.unsubscribeSalesHistory = window.firebaseServices.api.onSnapshot(q, (querySnapshot) => { 
-            const newHistory = []; 
-            querySnapshot.forEach((doc) => { newHistory.push({ ...doc.data(), firestoreId: doc.id }); }); 
-            this.state.salesHistory = newHistory.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)); 
-            this.updateHistoryDisplay(); 
-        }, (error) => { 
- 
-                   console.error("Error loading sales history:", error); 
-            if (error.code === 'permission-denied') { this.showInfoModal("ข้อผิดพลาด Firestore", "การเชื่อมต่อ Firestore ล้มเหลว! (permission-denied)", true); } 
-        });
-    },
+    });
+},
     
 async generateSaleId() {
   try {
@@ -4255,39 +4272,56 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // 2. ฟังก์ชันคำนวณยอด (เหมือนเดิม)
-    function updateDailySummary() {
-        const app = window.POS_APP;
-        if (!app || !app.state || !Array.isArray(app.state.salesHistory)) return;
+function updateDailySummary() {
+    const app = window.POS_APP;
+    // ตรวจสอบความพร้อมของ State และ ข้อมูลประวัติการขาย
+    if (!app || !app.state || !Array.isArray(app.state.salesHistory)) return;
 
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const startOfDay = today.getTime();
-        const endOfDay = startOfDay + (24 * 60 * 60 * 1000);
+    // 📅 กำหนดช่วงเวลา "วันนี้" (เริ่ม 00:00:00 ของวันนี้)
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
 
-        const todaySales = app.state.salesHistory.filter(s => {
-            const t = new Date(s.timestamp).getTime();
-            return t >= startOfDay && t < endOfDay;
-        });
+    // กรองประวัติการขายเฉพาะของวันนี้
+    const todaySales = app.state.salesHistory.filter(s => {
+        const t = new Date(s.timestamp).getTime();
+        return t >= startOfDay;
+    });
 
-        let totalNet = 0;
-        let totalDiscount = 0;
-        todaySales.forEach(s => {
-            totalNet += (parseFloat(s.total) || 0);
-            totalDiscount += (parseFloat(s.discount) || 0);
-        });
-        const totalGross = totalNet + totalDiscount;
-        const format = (val) => val.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
-        const setVal = (id, val, isPrice = true) => {
-            const el = document.getElementById(id);
-            if (el) el.textContent = isPrice ? format(val) : val;
-        };
+    let totalNet = 0;      // ยอดสุทธิ
+    let totalDiscount = 0; // ส่วนลดรวม
+    let totalCost = 0;     // ต้นทุนรวม (เพื่อหากำไร)
 
-        setVal('summary-total-sales', totalGross);
-        setVal('summary-total-discount', totalDiscount);
-        setVal('summary-net-sales', totalNet);
-        setVal('summary-bill-count', todaySales.length, false);
-    }
+    todaySales.forEach(s => {
+        totalNet += (parseFloat(s.total) || 0);
+        totalDiscount += (parseFloat(s.discount) || 0);
+        
+        // วนลูปคำนวณต้นทุนจากรายการสินค้าในบิลนั้นๆ
+        if (s.items && Array.isArray(s.items)) {
+            s.items.forEach(item => {
+                // ต้นทุนรวม = (ต้นทุนต่อหน่วยที่ขาย * จำนวนที่ขาย)
+                totalCost += (parseFloat(item.cost) || 0) * (parseFloat(item.quantity) || 0);
+            });
+        }
+    });
+
+    const totalGross = totalNet + totalDiscount; // ยอดรวมก่อนหักส่วนลด
+    const totalProfit = totalNet - totalCost;    // กำไร (ยอดรับจริง - ต้นทุนรวม)
+
+    // ฟังก์ชันช่วยจัดรูปแบบตัวเลข (มีคอมม่า และ ทศนิยม 2 ตำแหน่ง)
+    const format = (val) => val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    
+    // อัปเดตค่าลงในหน้า UI
+    const setVal = (id, val, isPrice = true) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = isPrice ? format(val) : val;
+    };
+
+    setVal('summary-total-sales', totalGross);
+    setVal('summary-total-discount', totalDiscount);
+    setVal('summary-net-sales', totalNet);
+    setVal('summary-profit', totalProfit);
+    setVal('summary-bill-count', todaySales.length, false);
+}
 
 // 3. จัดการ Event กดปุ่ม Esc
 document.addEventListener('keydown', (e) => {
@@ -4469,6 +4503,7 @@ document.addEventListener('keydown', (e) => {
 })();
 
 </script>
+
 
 
 
