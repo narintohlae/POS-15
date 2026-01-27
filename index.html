@@ -3299,7 +3299,7 @@ async confirmSale() {
         this.hidePaymentModal();
         const tabToDelete = this.state.activeTabId;
         this.closeTab(tabToDelete, false);
-        this.showInfoModal("สำเร็จ", `บันทึกการขาย ${newSaleId} เรียบร้อย`);
+        this.focusSearchIfReady();
 
     } catch (e) {
         console.error("Sale Error:", e);
@@ -4469,6 +4469,7 @@ document.addEventListener('keydown', (e) => {
 })();
 
 </script>
+
 
 
 
