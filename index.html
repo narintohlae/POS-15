@@ -3840,7 +3840,7 @@ async generateSaleId() {
 }
 ,
 async exportToExcel() {
-    console.log("🚀 เริ่มต้น Export และปรับความกว้างคอลัมน์อัตโนมัติ...");
+    console.log("🚀 เริ่มต้น Export: ปรับความกว้างตามหัวข้อ และชื่อสินค้าตามเนื้อหา...");
 
     if (!this.state.salesHistory || this.state.salesHistory.length === 0) {
         this.showInfoModal("ไม่มีข้อมูล", "ไม่มีข้อมูลประวัติการขายให้ Export", false);
@@ -3877,50 +3877,42 @@ async exportToExcel() {
     );
 
     try {
-        // 2. สร้าง Worksheet จากข้อมูล JSON
         const worksheet = XLSX.utils.json_to_sheet(dataToExport);
 
-        // 3. --- [คำนวณความกว้างคอลัมน์แบบ Auto-Fit] ---
-        const objectMaxLength = [];
-        dataToExport.forEach((row) => {
-            Object.keys(row).forEach((key, index) => {
-                const value = row[key] ? row[key].toString() : "";
-                const header = key.toString();
+        // 2. --- [ฟังก์ชันคำนวณความกว้างแบบเจาะจง] ---
+        const calcWidth = (text) => {
+            if (!text) return 0;
+            // ภาษาไทยนับเพิ่ม 0.7 เพื่อความแม่นยำของฟอนต์ใน Excel
+            return text.length + (text.match(/[ก-๙]/g) || []).length * 0.7;
+        };
 
-                /**
-                 * สูตรคำนวณความกว้าง:
-                 * - ตัวอักษรทั่วไปนับ 1
-                 * - ภาษาไทยนับเพิ่ม 0.7 (เพราะฟอนต์ไทยใน Excel กว้างกว่าปกติ)
-                 */
-                const calcWidth = (text) => {
-                    return text.length + (text.match(/[ก-๙]/g) || []).length * 0.7;
-                };
-
-                const cellLen = calcWidth(value);
-                const headLen = calcWidth(header);
-                
-                // หาค่าที่ยาวที่สุดระหว่างข้อมูลในแถว กับ หัวข้อคอลัมน์
-                const maxW = Math.max(cellLen, headLen);
-
-                if (typeof objectMaxLength[index] === 'undefined' || objectMaxLength[index] < maxW) {
-                    objectMaxLength[index] = maxW;
-                }
-            });
+        const headers = Object.keys(dataToExport[0]);
+        const colWidths = headers.map((key) => {
+            if (key === 'ชื่อสินค้า') {
+                // กรณี "ชื่อสินค้า": หาค่าที่ยาวที่สุดระหว่าง หัวข้อ VS เนื้อหาทุกบรรทัด
+                let maxWidth = calcWidth(key);
+                dataToExport.forEach(row => {
+                    const cellValue = row[key] ? row[key].toString() : "";
+                    const cellWidth = calcWidth(cellValue);
+                    if (cellWidth > maxWidth) maxWidth = cellWidth;
+                });
+                return { wch: maxWidth + 2 }; // เผื่อระยะขอบนิดหน่อย
+            } else {
+                // กรณีคอลัมน์อื่นๆ: ยึดตามความกว้างของ "หัวข้อ" เท่านั้น
+                return { wch: calcWidth(key) + 2 };
+            }
         });
 
-        // กำหนดความกว้างคอลัมน์ (wch) โดยบวกเผื่อช่องว่างข้างละนิด (รวมเป็น +2)
-        worksheet['!cols'] = objectMaxLength.map(w => ({ wch: w + 2 })); 
+        worksheet['!cols'] = colWidths;
         // ----------------------------------------------
 
-        // 4. สร้าง Workbook และเพิ่ม Worksheet เข้าไป
         const workbook = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(workbook, worksheet, 'Sales_Report');
 
-        // 5. บันทึกและดาวน์โหลดไฟล์
         const fileName = `Sales_Report_${new Date().toISOString().split('T')[0]}.xlsx`;
         XLSX.writeFile(workbook, fileName);
         
-        console.log(`🎉 Export สำเร็จ: ${fileName}`);
+        console.log(`🎉 Export สำเร็จ: ปรับความกว้างแบบ Custom เรียบร้อย`);
 
     } catch (e) {
         console.error("Export Excel Error:", e);
@@ -4461,5 +4453,6 @@ document.addEventListener('keydown', (e) => {
 })();
 
 </script>
+
 
 
