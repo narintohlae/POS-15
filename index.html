@@ -3847,7 +3847,7 @@ async exportToExcel() {
         return;
     }
 
-    // 1. เตรียมข้อมูลสำหรับ Export (เหมือนเดิม)
+    // 1. เตรียมข้อมูลสำหรับ Export
     const dataToExport = this.state.salesHistory.flatMap(sale =>
         sale.items.map(item => {
             const factor = item.conversionFactor || 1;
@@ -3865,55 +3865,66 @@ async exportToExcel() {
                 'จำนวนที่ขาย': quantitySold,
                 'จำนวนหน่วยย่อยรวม': totalSmallUnits,
                 'หน่วยย่อย (Base)': item.baseUnit || '',
-                'ราคา/หน่วยขาย': item.price.toFixed(2),
-                'ต้นทุน/หน่วยขาย': item.cost.toFixed(2),
-                'ยอดรวมขาย': totalItemValue.toFixed(2),
-                'ยอดรวมต้นทุน': totalItemCost.toFixed(2),
-                'กำไรส่วนต่าง': (totalItemValue - totalItemCost).toFixed(2),
-                'ส่วนลดท้ายบิล': sale.discount.toFixed(2),
-                'ยอดสุทธิทั้งบิล': sale.total.toFixed(2)
+                'ราคา/หน่วยขาย': parseFloat(item.price.toFixed(2)),
+                'ต้นทุน/หน่วยขาย': parseFloat(item.cost.toFixed(2)),
+                'ยอดรวมขาย': parseFloat(totalItemValue.toFixed(2)),
+                'ยอดรวมต้นทุน': parseFloat(totalItemCost.toFixed(2)),
+                'กำไรส่วนต่าง': parseFloat((totalItemValue - totalItemCost).toFixed(2)),
+                'ส่วนลดท้ายบิล': parseFloat(sale.discount.toFixed(2)),
+                'ยอดสุทธิทั้งบิล': parseFloat(sale.total.toFixed(2))
             };
         })
     );
 
     try {
-        // 2. สร้าง Worksheet
+        // 2. สร้าง Worksheet จากข้อมูล JSON
         const worksheet = XLSX.utils.json_to_sheet(dataToExport);
 
-        // --- [ส่วนที่เพิ่มเข้ามา: คำนวณความกว้างคอลัมน์] ---
+        // 3. --- [คำนวณความกว้างคอลัมน์แบบ Auto-Fit] ---
         const objectMaxLength = [];
         dataToExport.forEach((row) => {
             Object.keys(row).forEach((key, index) => {
                 const value = row[key] ? row[key].toString() : "";
-                // คำนวณความยาว (สำหรับภาษาไทยให้คูณ 1.5 หรือ 2 เพราะตัวอักษรกว้างกว่าภาษาอังกฤษ)
-                const width = value.search(/[ก-๙]/g) !== -1 ? value.length * 2 : value.length;
+                const header = key.toString();
+
+                /**
+                 * สูตรคำนวณความกว้าง:
+                 * - ตัวอักษรทั่วไปนับ 1
+                 * - ภาษาไทยนับเพิ่ม 0.7 (เพราะฟอนต์ไทยใน Excel กว้างกว่าปกติ)
+                 */
+                const calcWidth = (text) => {
+                    return text.length + (text.match(/[ก-๙]/g) || []).length * 0.7;
+                };
+
+                const cellLen = calcWidth(value);
+                const headLen = calcWidth(header);
                 
-                if (typeof objectMaxLength[index] === 'undefined' || objectMaxLength[index] < width) {
-                    objectMaxLength[index] = width;
-                }
-                
-                // ตรวจสอบความยาวของ Header ด้วย
-                const headerWidth = key.length * 2;
-                if (objectMaxLength[index] < headerWidth) {
-                    objectMaxLength[index] = headerWidth;
+                // หาค่าที่ยาวที่สุดระหว่างข้อมูลในแถว กับ หัวข้อคอลัมน์
+                const maxW = Math.max(cellLen, headLen);
+
+                if (typeof objectMaxLength[index] === 'undefined' || objectMaxLength[index] < maxW) {
+                    objectMaxLength[index] = maxW;
                 }
             });
         });
 
-        // ตั้งค่าความกว้างคอลัมน์ (wch = width in characters)
+        // กำหนดความกว้างคอลัมน์ (wch) โดยบวกเผื่อช่องว่างข้างละนิด (รวมเป็น +2)
         worksheet['!cols'] = objectMaxLength.map(w => ({ wch: w + 2 })); 
-        // --------------------------------------------------
+        // ----------------------------------------------
 
-        // 3. สร้าง Workbook และบันทึกไฟล์
+        // 4. สร้าง Workbook และเพิ่ม Worksheet เข้าไป
         const workbook = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(workbook, worksheet, 'Sales_Report');
 
+        // 5. บันทึกและดาวน์โหลดไฟล์
         const fileName = `Sales_Report_${new Date().toISOString().split('T')[0]}.xlsx`;
         XLSX.writeFile(workbook, fileName);
-        console.log(`🎉 Export สำเร็จพร้อมปรับขนาดคอลัมน์: ${fileName}`);
+        
+        console.log(`🎉 Export สำเร็จ: ${fileName}`);
+
     } catch (e) {
         console.error("Export Excel Error:", e);
-        this.showInfoModal("ผิดพลาด", "ไม่สามารถสร้างไฟล์ Excel ได้", true);
+        this.showInfoModal("ผิดพลาด", "ไม่สามารถสร้างไฟล์ Excel ได้: " + e.message, true);
     }
 },
     async loadReceiptSettings() {
@@ -4450,4 +4461,5 @@ document.addEventListener('keydown', (e) => {
 })();
 
 </script>
+
 
