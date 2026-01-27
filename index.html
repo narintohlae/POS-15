@@ -3840,25 +3840,19 @@ async generateSaleId() {
 }
 ,
 async exportToExcel() {
-    console.log("🚀 เริ่มต้น Export (ปรับปรุงการคำนวณหน่วยย่อย)...");
+    console.log("🚀 เริ่มต้น Export และปรับความกว้างคอลัมน์อัตโนมัติ...");
 
     if (!this.state.salesHistory || this.state.salesHistory.length === 0) {
         this.showInfoModal("ไม่มีข้อมูล", "ไม่มีข้อมูลประวัติการขายให้ Export", false);
         return;
     }
 
-    // เตรียมข้อมูลสำหรับ Export
+    // 1. เตรียมข้อมูลสำหรับ Export (เหมือนเดิม)
     const dataToExport = this.state.salesHistory.flatMap(sale =>
         sale.items.map(item => {
-            // ดึงค่าตัวคูณและหน่วยที่บันทึกไว้ในบิลตอนขาย
-            // ถ้าไม่มี (บิลเก่า) ให้ถือว่าเป็น 1
             const factor = item.conversionFactor || 1;
             const quantitySold = item.quantity || 0;
-            
-            // ✅ จำนวนหน่วยย่อยทั้งหมด (เช่น 1 แพ็ค x 4 = 4 ห่อ)
             const totalSmallUnits = item.totalBaseQuantity || (quantitySold * factor);
-            
-            // ✅ คำนวณต้นทุนรวมและราคาทั้งหมดของรายการนี้
             const totalItemValue = (item.price * quantitySold);
             const totalItemCost = (item.cost * quantitySold);
 
@@ -3866,37 +3860,57 @@ async exportToExcel() {
                 'รหัสการขาย': sale.id,
                 'วันที่': new Date(sale.timestamp).toLocaleDateString('th-TH'),
                 'เวลา': new Date(sale.timestamp).toLocaleTimeString('th-TH'),
-                
                 'ชื่อสินค้า': item.name || item.productName,
                 'หน่วยที่ขาย': item.unit || 'หน่วย',
-                'จำนวนที่ขาย': quantitySold, // เช่น 1
-                
-                // --- ส่วนที่แก้ไขให้โชว์จำนวนหน่วยย่อย ---
-                'จำนวนหน่วยย่อยรวม': totalSmallUnits, // ✅ จะแสดงเป็น 4 หรือ 10 ตามที่คุณต้องการ
+                'จำนวนที่ขาย': quantitySold,
+                'จำนวนหน่วยย่อยรวม': totalSmallUnits,
                 'หน่วยย่อย (Base)': item.baseUnit || '',
-                
                 'ราคา/หน่วยขาย': item.price.toFixed(2),
                 'ต้นทุน/หน่วยขาย': item.cost.toFixed(2),
-                
                 'ยอดรวมขาย': totalItemValue.toFixed(2),
                 'ยอดรวมต้นทุน': totalItemCost.toFixed(2),
                 'กำไรส่วนต่าง': (totalItemValue - totalItemCost).toFixed(2),
-                
                 'ส่วนลดท้ายบิล': sale.discount.toFixed(2),
                 'ยอดสุทธิทั้งบิล': sale.total.toFixed(2)
             };
         })
     );
 
-    // สร้างไฟล์ Excel
     try {
+        // 2. สร้าง Worksheet
         const worksheet = XLSX.utils.json_to_sheet(dataToExport);
+
+        // --- [ส่วนที่เพิ่มเข้ามา: คำนวณความกว้างคอลัมน์] ---
+        const objectMaxLength = [];
+        dataToExport.forEach((row) => {
+            Object.keys(row).forEach((key, index) => {
+                const value = row[key] ? row[key].toString() : "";
+                // คำนวณความยาว (สำหรับภาษาไทยให้คูณ 1.5 หรือ 2 เพราะตัวอักษรกว้างกว่าภาษาอังกฤษ)
+                const width = value.search(/[ก-๙]/g) !== -1 ? value.length * 2 : value.length;
+                
+                if (typeof objectMaxLength[index] === 'undefined' || objectMaxLength[index] < width) {
+                    objectMaxLength[index] = width;
+                }
+                
+                // ตรวจสอบความยาวของ Header ด้วย
+                const headerWidth = key.length * 2;
+                if (objectMaxLength[index] < headerWidth) {
+                    objectMaxLength[index] = headerWidth;
+                }
+            });
+        });
+
+        // ตั้งค่าความกว้างคอลัมน์ (wch = width in characters)
+        worksheet['!cols'] = objectMaxLength.map(w => ({ wch: w + 2 })); 
+        // --------------------------------------------------
+
+        // 3. สร้าง Workbook และบันทึกไฟล์
         const workbook = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(workbook, worksheet, 'Sales_Report');
 
         const fileName = `Sales_Report_${new Date().toISOString().split('T')[0]}.xlsx`;
         XLSX.writeFile(workbook, fileName);
-        console.log(`🎉 Export สำเร็จ: ${fileName}`);
+        console.log(`🎉 Export สำเร็จพร้อมปรับขนาดคอลัมน์: ${fileName}`);
     } catch (e) {
         console.error("Export Excel Error:", e);
         this.showInfoModal("ผิดพลาด", "ไม่สามารถสร้างไฟล์ Excel ได้", true);
@@ -4436,3 +4450,4 @@ document.addEventListener('keydown', (e) => {
 })();
 
 </script>
+
