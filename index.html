@@ -1451,7 +1451,7 @@ h2 .auth-status-badge.offline .dot { background: #999; }
     // Firebase Initialization (Secure Method with Local Fallback)
     import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
     import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-    import { getFirestore, collection, onSnapshot, addDoc, doc, deleteDoc, writeBatch, getDocs, query, where, setDoc, updateDoc, collectionGroup, getDoc, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+    import { getFirestore, collection, onSnapshot, addDoc, doc, deleteDoc, writeBatch, getDocs, query, where, setDoc, updateDoc, collectionGroup, getDoc, setLogLevel, increment } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
     let firebaseConfig;
     const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
@@ -1482,7 +1482,7 @@ h2 .auth-status-badge.offline .dot { background: #999; }
         const auth = getAuth(app);
         setLogLevel('error');
 
-        window.firebaseServices = { db, auth, appId, api: { collection, onSnapshot, addDoc, doc, deleteDoc, writeBatch, getDocs, query, where, setDoc, updateDoc, collectionGroup, getDoc } };
+        window.firebaseServices = { db, auth, appId, api: { collection, onSnapshot, addDoc, doc, deleteDoc, writeBatch, getDocs, query, where, setDoc, updateDoc, collectionGroup, getDoc, increment } };
 
         onAuthStateChanged(auth, async (user) => {
             if (user) {
@@ -3250,7 +3250,6 @@ async confirmSale() {
                     const oldFactor = oldItem.conversionFactor || 1;
                     const returnQty = oldItem.quantity * oldFactor;
                     
-                    // ใช้ increment เพื่อความปลอดภัยและแม่นยำ
                     batch.update(productRef, { 
                         stockInBaseUnits: api.increment(returnQty) 
                     });
@@ -3258,7 +3257,6 @@ async confirmSale() {
                 // ลบบิลเก่าทิ้ง
                 const oldDocRef = api.doc(salesCollectionRef, tabData.originalFirestoreId);
                 batch.delete(oldDocRef);
-                console.log(`♻️ คืนสต็อกและเตรียมลบบิลเก่า: ${oldSale.id}`);
             }
         }
 
@@ -3284,7 +3282,8 @@ async confirmSale() {
                 totalBaseQuantity: totalBaseQty,
                 price: pricePerSellingUnit,
                 cost: pUnit.cost || 0,
-                baseUnit: item.productUnit.baseUnit
+                baseUnit: item.productUnit.baseUnit,
+                cartItemId: item.cartItemId
             };
         });
 
@@ -3305,7 +3304,6 @@ async confirmSale() {
             const factor = item.productUnit.pricingUnit.conversionFactor || 1;
             const deductionQty = item.quantity * factor;
             
-            // หักสต็อก (ใช้ค่าลบใน increment)
             batch.update(productRef, { 
                 stockInBaseUnits: api.increment(-deductionQty) 
             });
@@ -3322,18 +3320,15 @@ async confirmSale() {
         const tabToDelete = this.state.activeTabId;
         this.closeTab(tabToDelete, false);
 
-        // เคลียร์สถานะการแก้ไขในหน้า UI
+        // ปิดสถานะ Edit และแจ้งเตือน Summary
         const editStatusEl = document.getElementById('edit-status');
         if (editStatusEl) editStatusEl.style.display = 'none';
 
-        // 🔄 อัปเดต Summary Grid ทันที (Real-time)
         if (typeof window.updateDailySummary === 'function') {
             window.updateDailySummary();
         }
 
-        // 🎯 โฟกัสไปที่ช่องค้นหาสินค้าทันที
         this.focusSearchIfReady();
-
         console.log(`🚀 บันทึกบิลสำเร็จ: ${newSaleId}`);
 
     } catch (e) {
