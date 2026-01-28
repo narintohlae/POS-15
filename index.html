@@ -3621,32 +3621,66 @@ async confirmSale() {
     },
 updateHistoryDisplay() {
     const historyBody = document.getElementById('history-body');
-    if (!historyBody) return;
+    const summaryCountEl = document.getElementById('history-product-count'); // กล่องสรุป
+    if (!historyBody || !summaryCountEl) return;
 
     const searchFilter = document.getElementById('history-search-input').value.toLowerCase().trim();
+    
+    // 1. กรองประวัติการขายตามที่พิมพ์ค้นหา
     const filteredHistory = this.state.salesHistory.filter(sale => {
         const idMatch = sale.id.toLowerCase().includes(searchFilter);
         const itemMatch = sale.items.some(item => item.name.toLowerCase().includes(searchFilter));
         return idMatch || itemMatch;
     });
 
+    // --- [เพิ่มส่วนการคำนวณสรุปสินค้า] ---
+    let totalQtyFound = 0;
+    let matchCount = 0;
+
+    if (searchFilter !== '') {
+        filteredHistory.forEach(sale => {
+            sale.items.forEach(item => {
+                // ตรวจสอบว่าชื่อสินค้าหรือรหัสตรงกับที่ค้นหาหรือไม่
+                if (item.name.toLowerCase().includes(searchFilter)) {
+                    totalQtyFound += (item.quantity || 0);
+                    matchCount++;
+                }
+            });
+        });
+    }
+
+    // อัปเดต UI กล่องสรุป (ถ้ามีการค้นหาให้แสดง ถ้าไม่มีให้ซ่อน)
+    if (searchFilter !== '' && totalQtyFound > 0) {
+        summaryCountEl.style.display = 'block';
+        summaryCountEl.innerHTML = `
+            <div class="hs-grid">
+                <div class="hs-title">📊 สรุปการค้นหา "${searchFilter}" ในช่วงเวลาที่เลือก</div>
+                <div class="hs-meta">
+                    <span class="chip">พบในประวัติ: <strong>${filteredHistory.length}</strong> บิล</span>
+                    <span class="chip">จำนวนที่ขายได้รวม: <strong style="color:var(--primary-color); font-size:1.2em;">${totalQtyFound}</strong> รายการ</span>
+                </div>
+            </div>
+        `;
+    } else {
+        summaryCountEl.style.display = 'none';
+    }
+    // -------------------------------------
+
     historyBody.innerHTML = '';
 
     filteredHistory.forEach(sale => {
         const row = historyBody.insertRow();
         
-        // ส่วนการแสดงผลรายการสินค้าในบิล
         const itemDetails = sale.items.map(item => {
             const name = this.escapeHtml(item.name);
             const unit = item.unit || "";
             const qty = item.quantity;
-            const factor = item.conversionFactor || 1;
-            const baseUnit = item.baseUnit || "";
-
-            let detail = `${name} x ${qty} ${unit}`;
-            if (factor > 1) {
-                detail += ` <small style="color:var(--secondary-color)">(รวม ${qty * factor} ${baseUnit})</small>`;
-            }
+            
+            // ไฮไลท์รายการที่ตรงกับคำค้นหาเพื่อให้ดูง่าย
+            const isMatch = name.toLowerCase().includes(searchFilter) && searchFilter !== '';
+            const style = isMatch ? 'background-color: #fff3cd; font-weight: bold; padding: 2px 4px; border-radius: 4px;' : '';
+            
+            let detail = `<span style="${style}">${name} x ${qty} ${unit}</span>`;
             return detail;
         }).join('<br>');
 
@@ -3659,14 +3693,9 @@ updateHistoryDisplay() {
             <td>
                 <div class="history-actions" style="display: flex; gap: 5px;">
                     <button class="print-history-btn" onclick="POS_APP.printSaleRecordFromHistory('${sale.firestoreId}')">พิมพ์</button>
-                    
                     ${!this.state.isRestrictedMode ? `
-                        <button class="edit-history-btn" 
-                                style="background-color: #ff9800; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer;"
-                                onclick="POS_APP.editSaleRecord('${sale.firestoreId}')">แก้ไข</button>
-                                
-                        <button class="delete-history-btn" 
-                                onclick="POS_APP.showDeleteConfirmModal('${sale.firestoreId}', false)">ลบ</button>
+                        <button class="edit-history-btn" style="background-color: #ff9800; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer;" onclick="POS_APP.editSaleRecord('${sale.firestoreId}')">แก้ไข</button>
+                        <button class="delete-history-btn" onclick="POS_APP.showDeleteConfirmModal('${sale.firestoreId}', false)">ลบ</button>
                     ` : ''}
                 </div>
             </td>
@@ -4518,6 +4547,7 @@ document.addEventListener('DOMContentLoaded', () => {
 })();
 
 </script>
+
 
 
 
