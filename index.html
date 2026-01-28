@@ -2841,9 +2841,11 @@ showProductEditorModal(product) {
 updateCartDisplay() {
     const cart = this.getActiveCart();
     const discount = this.getActiveDiscount();
-    document.getElementById('discount-input').value = discount || '';
+    const discountInput = document.getElementById('discount-input');
+    if (discountInput) discountInput.value = discount || '';
 
     const cartItemsElement = document.getElementById('cart-items');
+    if (!cartItemsElement) return;
     cartItemsElement.innerHTML = '';
 
     if (!cart) return;
@@ -2884,7 +2886,7 @@ updateCartDisplay() {
       }
       li.setAttribute("data-qty", quantity);
 
-      // --- ส่วนแสดงผล ชื่อ + คงเหลือ/ทุน (บรรทัดเดียวกัน) ---
+      // --- ส่วนแสดงผล ชื่อ + คงเหลือ/ทุน ---
       const stockInThisUnit = productUnit.stockInBaseUnits / productUnit.pricingUnit.conversionFactor;
       const cost = productUnit.pricingUnit.cost || 0;
       const stockDisplay = parseFloat(stockInThisUnit.toFixed(2)); 
@@ -2898,13 +2900,16 @@ updateCartDisplay() {
             </span>
         </div>
       `;
-      // -----------------------------------------------------
 
       li.innerHTML = `
         <div class="col-seq">${index + 1}</div>
         <div class="col-name">${itemInfoHTML}</div>
         <div class="col-qty">
-            <input type="number" class="item-input" value="${quantity}" onchange="POS_APP.editItemQuantity(${index}, this.value)" onclick="this.select()">
+            <input type="number" class="item-input" 
+                   value="${quantity}" 
+                   onchange="POS_APP.editItemQuantity(${index}, this.value)" 
+                   onkeydown="if(event.key==='Enter'){ this.blur(); }" 
+                   onclick="this.select()">
         </div>
         <div class="col-price">${this.formatPrice(pricePerUnit)}</div>
         
@@ -2912,6 +2917,7 @@ updateCartDisplay() {
             <input type="number" class="item-input" 
                    value="${parseFloat(totalForItem.toFixed(2))}" 
                    onchange="POS_APP.editItemTotal(${index}, this.value)" 
+                   onkeydown="if(event.key==='Enter'){ this.blur(); }" 
                    onclick="this.select()" 
                    step="any"
                    style="font-weight: bold; color: var(--primary-color);">
@@ -2930,7 +2936,10 @@ updateCartDisplay() {
     document.getElementById('cart-subtotal').textContent = this.formatPrice(subtotal);
     const finalTotal = subtotal - (discount || 0);
     document.getElementById('cart-total').textContent = this.formatPrice(finalTotal);
-  },
+    
+    // สำคัญ: เรียกเซฟสถานะสำรองทุกครั้งที่อัปเดตตะกร้า
+    if (this.saveStateToStorage) this.saveStateToStorage();
+},
 
     editItemTotal(index, newTotalValue) {
         const cart = this.getActiveCart();
@@ -3123,6 +3132,7 @@ updateCartDisplay() {
             }
         } 
         this.updateCartDisplay();
+        this.focusSearchIfReady();
     },
 
 // ฟังก์ชันใหม่: สำหรับแก้ไขราคารวมโดยตรง
@@ -3143,6 +3153,7 @@ updateCartDisplay() {
     }
     
     this.updateCartDisplay();
+    this.focusSearchIfReady();
     // บันทึกลง Storage ถ้ามีฟังก์ชันนี้
     if (this.saveStateToStorage) this.saveStateToStorage();
   },
@@ -4547,6 +4558,7 @@ document.addEventListener('DOMContentLoaded', () => {
 })();
 
 </script>
+
 
 
 
