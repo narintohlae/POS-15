@@ -1944,7 +1944,7 @@ const response = await fetch(this.config.googleSheetUrl + '?t=' + new Date().get
        
                  const currentHash = await this._normalizeAndHashData(jsonData);
 
-                if (this.state.lastSheetHash && this.state.lastSheetHash !== currentHash) {
+                if (true || (this.state.lastSheetHash && this.state.lastSheetHash !== currentHash)) {
                     console.log('Auto-Import: Detected changes. Importing...');
                     this.showInfoModal('อัปเดตอัตโนมัติ', 'ตรวจพบการเปลี่ยนแปลงใน Google Script กำลังนำเข้าข้อมูล...');
                   
@@ -4558,3 +4558,4 @@ document.addEventListener('DOMContentLoaded', () => {
 })();
 
 </script>
+
