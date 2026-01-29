@@ -1928,70 +1928,52 @@ document.getElementById('info-modal-ok-btn').addEventListener('click', this.hide
         return this._hashText(stableString);
     },
 
-async startAutoImportPolling() {
-        // เคลียร์ Interval เก่าถ้ามี (ป้องกันการรันซ้อน)
+    async startAutoImportPolling() {
         if (this.state.autoImportInterval) {
             clearInterval(this.state.autoImportInterval);
         }
-
-        const intervalMinutes = 5; // ระยะเวลาตรวจสอบ (นาที)
-
-        // สร้างฟังก์ชันตรวจสอบแยกออกมา เพื่อเรียกใช้ซ้ำได้
-        const checkForUpdates = async () => {
-            console.log(`Auto-Import: Checking for updates... (${new Date().toLocaleTimeString()})`);
-            
+        const intervalMinutes = 5;
+        this.state.autoImportInterval = setInterval(async () => {
+            console.log('Auto-Import: Checking for Google Script updates...');
             try {
-                // 1. ดึงข้อมูลจาก Google Script (ใส่ ?t=... ป้องกัน Cache)
-                const response = await fetch(this.config.googleSheetUrl + '?t=' + new Date().getTime());
-                if (!response.ok) {
-                    console.warn('Auto-Import: Fetch failed status:', response.status);
-                    return;
-                }
+                // เติม ?t=เวลาปัจจุบัน เพื่อบังคับให้ไม่ใช้ Cache
+const response = await fetch(this.config.googleSheetUrl + '?t=' + new Date().getTime());
+                if (!response.ok) return;
 
-                // 2. แปลงข้อมูล
-                const result = await response.json();
-                // รองรับทั้งแบบที่ส่งมาเป็น Array ตรงๆ หรืออยู่ใน object .data
-                const jsonData = result.data || result; 
+                const jsonData = await response.json();
+       
+                 const currentHash = await this._normalizeAndHashData(jsonData);
 
-                // 3. คำนวณ Hash (ลายนิ้วมือของข้อมูล)
-                const currentHash = await this._normalizeAndHashData(jsonData);
-
-                // [DEBUG LOG] แสดงค่า Hash เก่า vs ใหม่ ให้เห็นชัดๆ
-                console.log(`Auto-Import Debug: OldHash=${this.state.lastSheetHash} | NewHash=${currentHash}`);
-
-                // 4. เปรียบเทียบ
                 if (this.state.lastSheetHash && this.state.lastSheetHash !== currentHash) {
-                    // --- กรณีข้อมูลเปลี่ยน ---
-                    console.log('Auto-Import: 🟢 DETECTED CHANGES. Importing...');
-                    
-                    // แจ้งเตือนผู้ใช้ (ส่ง false เพื่อไม่ให้เป็นตัวแดง error)
-                    this.showInfoModal('อัปเดตอัตโนมัติ', 'ตรวจพบข้อมูลใหม่ใน Google Sheet กำลังนำเข้า...', false);
-                    
-                    // สั่งนำเข้าข้อมูล
-                    await this.importFromGoogleSheet(true);
-
-                    // อัปเดต Hash ใหม่หลังจากนำเข้าเสร็จ
-                    this.state.lastSheetHash = currentHash;
-
+                    console.log('Auto-Import: Detected changes. Importing...');
+                    this.showInfoModal('อัปเดตอัตโนมัติ', 'ตรวจพบการเปลี่ยนแปลงใน Google Script กำลังนำเข้าข้อมูล...');
+                  
+                  this.importFromGoogleSheet(true);
                 } else if (!this.state.lastSheetHash) {
-                    // --- กรณีเริ่มระบบครั้งแรก (ยังไม่มี Hash เก่า) ---
-                    console.log('Auto-Import: 🔵 Initial hash set.');
-                    this.state.lastSheetHash = currentHash;
+                    console.log('Auto-Import: Initial hash set.');
                 } else {
-                    // --- กรณีข้อมูลเหมือนเดิม ---
-                    console.log('Auto-Import: ⚪ No changes detected.');
-                }
-
-            } catch (error) {
+                    console.log('Auto-Import: No changes detected.');
+              
+                  }
+                this.state.lastSheetHash = currentHash;
+        } catch (error) {
                 console.error('Auto-Import Error:', error);
+        }
+        }, intervalMinutes * 60 * 1000);
+        (async () => {
+            try {
+                // เติม ?t=เวลาปัจจุบัน เพื่อบังคับให้ไม่ใช้ Cache
+const response = await fetch(this.config.googleSheetUrl + '?t=' + new Date().getTime());
+                if (response.ok) {
+                    const jsonData = await response.json();
+                    this.state.lastSheetHash = 
+                    await this._normalizeAndHashData(jsonData);
+                    console.log('Auto-Import: Polling started. Initial hash captured.');
+                }
+            } catch (e) {
+                console.error('Auto-Import initial fetch error:', e);
             }
-        };
-
-        // เรียกทำงานครั้งแรกทันที (ไม่ต้องรอ 5 นาที)
-        checkForUpdates();
-
-        // ตั้งเวลาทำงานวนลูป
-        this.state.autoImportInterval = setInterval(checkForUpdates, intervalMinutes * 60 * 1000);
+        })();
     },
 
     stopAutoImportPolling() {
@@ -4576,5 +4558,3 @@ document.addEventListener('DOMContentLoaded', () => {
 })();
 
 </script>
-
-
