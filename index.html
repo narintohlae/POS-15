@@ -3967,7 +3967,7 @@ async exportToExcel() {
             if (specialUnitObj) {
                 // เงื่อนไขหน่วยพิเศษ: ใช้ตัวคูณมาตรฐาน
                 const multiplier = Math.round(1 / specialUnitObj.conversionFactor);
-                finalTotalSmallUnits = multiplier;    
+                finalTotalSmallUnits = quantitySold * multiplier;    
                 finalBaseUnit = specialUnitObj.unitName; 
             } 
             else if (finalTotalSmallUnits % 1 !== 0) {
@@ -4558,3 +4558,4 @@ document.addEventListener('DOMContentLoaded', () => {
 })();
 
 </script>
+
